@@ -1,0 +1,692 @@
+import java.util.*;
+import java.time.*;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
+
+/**
+ * ============================================================
+ *          JAVA LIBRARY MANAGEMENT SYSTEM
+ *          A fully-featured console application
+ * ============================================================
+ *
+ *  Features:
+ *   - Add, remove, search, and list books
+ *   - Register and manage members
+ *   - Borrow and return books with due dates
+ *   - Fine calculation for overdue books
+ *   - Statistics and reports
+ *   - Persistent in-memory state with sample data
+ *
+ *  Run: javac LibraryManagementSystem.java && java LibraryManagementSystem
+ * ============================================================
+ */
+public class LibraryManagementSystem {
+
+    // ─── CONSTANTS ────────────────────────────────────────────────────────────
+    static final int LOAN_DAYS         = 14;
+    static final double FINE_PER_DAY   = 0.50;
+    static final int MAX_BOOKS_PER_MEMBER = 5;
+    static final DateTimeFormatter DATE_FMT =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd");
+
+    // ─── BOOK ─────────────────────────────────────────────────────────────────
+    static class Book {
+        private static int idCounter = 1000;
+
+        final int    id;
+        String       title;
+        String       author;
+        String       isbn;
+        String       genre;
+        int          year;
+        int          totalCopies;
+        int          availableCopies;
+
+        Book(String title, String author, String isbn,
+             String genre, int year, int copies) {
+            this.id              = idCounter++;
+            this.title           = title;
+            this.author          = author;
+            this.isbn            = isbn;
+            this.genre           = genre;
+            this.year            = year;
+            this.totalCopies     = copies;
+            this.availableCopies = copies;
+        }
+
+        boolean isAvailable() { return availableCopies > 0; }
+
+        @Override
+        public String toString() {
+            return String.format(
+                "[%d] %-35s | %-22s | %-15s | %d | %d/%d copies",
+                id, truncate(title, 34), truncate(author, 21),
+                genre, year, availableCopies, totalCopies
+            );
+        }
+    }
+
+    // ─── MEMBER ───────────────────────────────────────────────────────────────
+    static class Member {
+        private static int idCounter = 2000;
+
+        final int    id;
+        String       name;
+        String       email;
+        String       phone;
+        LocalDate    joinDate;
+        boolean      active;
+        List<Integer> borrowedLoanIds;
+
+        Member(String name, String email, String phone) {
+            this.id             = idCounter++;
+            this.name           = name;
+            this.email          = email;
+            this.phone          = phone;
+            this.joinDate       = LocalDate.now();
+            this.active         = true;
+            this.borrowedLoanIds = new ArrayList<>();
+        }
+
+        int borrowCount() { return borrowedLoanIds.size(); }
+
+        @Override
+        public String toString() {
+            return String.format(
+                "[%d] %-25s | %-28s | %-14s | Books: %d | %s",
+                id, truncate(name, 24), truncate(email, 27),
+                phone, borrowCount(), active ? "Active" : "Inactive"
+            );
+        }
+    }
+
+    // ─── LOAN ─────────────────────────────────────────────────────────────────
+    static class Loan {
+        private static int idCounter = 3000;
+
+        final int        id;
+        final int        memberId;
+        final int        bookId;
+        final LocalDate  borrowDate;
+        LocalDate        dueDate;
+        LocalDate        returnDate;
+        boolean          returned;
+        double           fine;
+
+        Loan(int memberId, int bookId) {
+            this.id         = idCounter++;
+            this.memberId   = memberId;
+            this.bookId     = bookId;
+            this.borrowDate = LocalDate.now();
+            this.dueDate    = borrowDate.plusDays(LOAN_DAYS);
+            this.returned   = false;
+            this.fine       = 0.0;
+        }
+
+        boolean isOverdue() {
+            return !returned && LocalDate.now().isAfter(dueDate);
+        }
+
+        long daysOverdue() {
+            if (!isOverdue()) return 0;
+            return ChronoUnit.DAYS.between(dueDate, LocalDate.now());
+        }
+
+        double calculateFine() {
+            return daysOverdue() * FINE_PER_DAY;
+        }
+
+        @Override
+        public String toString() {
+            String status = returned
+                ? "Returned " + returnDate.format(DATE_FMT)
+                : (isOverdue() ? "OVERDUE (" + daysOverdue() + " days)" : "Active");
+            return String.format(
+                "[%d] Member:%d  Book:%d  Borrowed:%s  Due:%s  Status:%s  Fine:$%.2f",
+                id, memberId, bookId,
+                borrowDate.format(DATE_FMT),
+                dueDate.format(DATE_FMT),
+                status,
+                returned ? fine : calculateFine()
+            );
+        }
+    }
+
+    // ─── DATA STORE ───────────────────────────────────────────────────────────
+    static Map<Integer, Book>   books   = new LinkedHashMap<>();
+    static Map<Integer, Member> members = new LinkedHashMap<>();
+    static Map<Integer, Loan>   loans   = new LinkedHashMap<>();
+    static Scanner sc = new Scanner(System.in);
+
+    // ─── MAIN ────────────────────────────────────────────────────────────────
+    public static void main(String[] args) {
+        seedData();
+        printBanner();
+        boolean running = true;
+        while (running) {
+            printMainMenu();
+            int choice = readInt("Enter choice: ");
+            switch (choice) {
+                case 1  -> bookMenu();
+                case 2  -> memberMenu();
+                case 3  -> loanMenu();
+                case 4  -> reportsMenu();
+                case 0  -> running = false;
+                default -> warn("Invalid option. Try again.");
+            }
+        }
+        info("Thank you for using the Library Management System. Goodbye!");
+    }
+
+    // ─── MENUS ───────────────────────────────────────────────────────────────
+    static void printMainMenu() {
+        System.out.println();
+        System.out.println("═══════════════════════════════════════");
+        System.out.println("       LIBRARY MANAGEMENT SYSTEM       ");
+        System.out.println("═══════════════════════════════════════");
+        System.out.println("  1. Books");
+        System.out.println("  2. Members");
+        System.out.println("  3. Loans (Borrow / Return)");
+        System.out.println("  4. Reports & Statistics");
+        System.out.println("  0. Exit");
+        System.out.println("───────────────────────────────────────");
+    }
+
+    static void bookMenu() {
+        boolean back = false;
+        while (!back) {
+            System.out.println("\n── BOOKS ──────────────────────────────");
+            System.out.println("  1. List all books");
+            System.out.println("  2. Search books");
+            System.out.println("  3. Add a book");
+            System.out.println("  4. Edit a book");
+            System.out.println("  5. Remove a book");
+            System.out.println("  0. Back");
+            int c = readInt("Choice: ");
+            switch (c) {
+                case 1 -> listBooks();
+                case 2 -> searchBooks();
+                case 3 -> addBook();
+                case 4 -> editBook();
+                case 5 -> removeBook();
+                case 0 -> back = true;
+                default -> warn("Invalid option.");
+            }
+        }
+    }
+
+    static void memberMenu() {
+        boolean back = false;
+        while (!back) {
+            System.out.println("\n── MEMBERS ────────────────────────────");
+            System.out.println("  1. List all members");
+            System.out.println("  2. Search members");
+            System.out.println("  3. Register a member");
+            System.out.println("  4. Edit a member");
+            System.out.println("  5. Deactivate a member");
+            System.out.println("  0. Back");
+            int c = readInt("Choice: ");
+            switch (c) {
+                case 1 -> listMembers();
+                case 2 -> searchMembers();
+                case 3 -> addMember();
+                case 4 -> editMember();
+                case 5 -> deactivateMember();
+                case 0 -> back = true;
+                default -> warn("Invalid option.");
+            }
+        }
+    }
+
+    static void loanMenu() {
+        boolean back = false;
+        while (!back) {
+            System.out.println("\n── LOANS ──────────────────────────────");
+            System.out.println("  1. Borrow a book");
+            System.out.println("  2. Return a book");
+            System.out.println("  3. View all active loans");
+            System.out.println("  4. View overdue loans");
+            System.out.println("  5. View member loans");
+            System.out.println("  0. Back");
+            int c = readInt("Choice: ");
+            switch (c) {
+                case 1 -> borrowBook();
+                case 2 -> returnBook();
+                case 3 -> listActiveLoans();
+                case 4 -> listOverdueLoans();
+                case 5 -> viewMemberLoans();
+                case 0 -> back = true;
+                default -> warn("Invalid option.");
+            }
+        }
+    }
+
+    static void reportsMenu() {
+        boolean back = false;
+        while (!back) {
+            System.out.println("\n── REPORTS ────────────────────────────");
+            System.out.println("  1. Library summary");
+            System.out.println("  2. Most borrowed books");
+            System.out.println("  3. Most active members");
+            System.out.println("  4. Fines summary");
+            System.out.println("  5. Genre breakdown");
+            System.out.println("  0. Back");
+            int c = readInt("Choice: ");
+            switch (c) {
+                case 1 -> summarizeLibrary();
+                case 2 -> mostBorrowedBooks();
+                case 3 -> mostActiveMembers();
+                case 4 -> finesSummary();
+                case 5 -> genreBreakdown();
+                case 0 -> back = true;
+                default -> warn("Invalid option.");
+            }
+        }
+    }
+
+    // ─── BOOK OPERATIONS ─────────────────────────────────────────────────────
+    static void listBooks() {
+        printSectionHeader("ALL BOOKS (" + books.size() + ")");
+        if (books.isEmpty()) { info("No books in the library."); return; }
+        printBookHeader();
+        books.values().forEach(System.out::println);
+    }
+
+    static void searchBooks() {
+        String query = readString("Search (title/author/isbn/genre): ").toLowerCase();
+        List<Book> results = books.values().stream()
+            .filter(b -> b.title.toLowerCase().contains(query)
+                      || b.author.toLowerCase().contains(query)
+                      || b.isbn.toLowerCase().contains(query)
+                      || b.genre.toLowerCase().contains(query))
+            .toList();
+        printSectionHeader("SEARCH RESULTS (" + results.size() + ")");
+        if (results.isEmpty()) { info("No books found."); return; }
+        printBookHeader();
+        results.forEach(System.out::println);
+    }
+
+    static void addBook() {
+        printSectionHeader("ADD NEW BOOK");
+        String title  = readString("Title: ");
+        String author = readString("Author: ");
+        String isbn   = readString("ISBN: ");
+        String genre  = readString("Genre: ");
+        int year      = readInt("Year: ");
+        int copies    = readInt("Number of copies: ");
+        if (copies < 1) { warn("Copies must be at least 1."); return; }
+        Book book = new Book(title, author, isbn, genre, year, copies);
+        books.put(book.id, book);
+        ok("Book added successfully! ID: " + book.id);
+    }
+
+    static void editBook() {
+        int id = readInt("Enter Book ID to edit: ");
+        Book book = books.get(id);
+        if (book == null) { warn("Book not found."); return; }
+        System.out.println("Current: " + book);
+        System.out.println("(Press Enter to keep current value)");
+        String title  = readStringOptional("New title [" + book.title + "]: ");
+        String author = readStringOptional("New author [" + book.author + "]: ");
+        String genre  = readStringOptional("New genre [" + book.genre + "]: ");
+        if (!title.isEmpty())  book.title  = title;
+        if (!author.isEmpty()) book.author = author;
+        if (!genre.isEmpty())  book.genre  = genre;
+        ok("Book updated.");
+    }
+
+    static void removeBook() {
+        int id = readInt("Enter Book ID to remove: ");
+        Book book = books.get(id);
+        if (book == null) { warn("Book not found."); return; }
+        boolean hasActiveLoans = loans.values().stream()
+            .anyMatch(l -> l.bookId == id && !l.returned);
+        if (hasActiveLoans) {
+            warn("Cannot remove book — it has active loans.");
+            return;
+        }
+        System.out.print("Confirm removal of '" + book.title + "'? (y/n): ");
+        if (sc.nextLine().trim().equalsIgnoreCase("y")) {
+            books.remove(id);
+            ok("Book removed.");
+        } else {
+            info("Removal cancelled.");
+        }
+    }
+
+    // ─── MEMBER OPERATIONS ───────────────────────────────────────────────────
+    static void listMembers() {
+        printSectionHeader("ALL MEMBERS (" + members.size() + ")");
+        if (members.isEmpty()) { info("No members registered."); return; }
+        members.values().forEach(System.out::println);
+    }
+
+    static void searchMembers() {
+        String query = readString("Search (name/email/phone): ").toLowerCase();
+        List<Member> results = members.values().stream()
+            .filter(m -> m.name.toLowerCase().contains(query)
+                      || m.email.toLowerCase().contains(query)
+                      || m.phone.contains(query))
+            .toList();
+        printSectionHeader("SEARCH RESULTS (" + results.size() + ")");
+        if (results.isEmpty()) { info("No members found."); return; }
+        results.forEach(System.out::println);
+    }
+
+    static void addMember() {
+        printSectionHeader("REGISTER NEW MEMBER");
+        String name  = readString("Full name: ");
+        String email = readString("Email: ");
+        String phone = readString("Phone: ");
+        Member member = new Member(name, email, phone);
+        members.put(member.id, member);
+        ok("Member registered! ID: " + member.id);
+    }
+
+    static void editMember() {
+        int id = readInt("Enter Member ID to edit: ");
+        Member m = members.get(id);
+        if (m == null) { warn("Member not found."); return; }
+        System.out.println("Current: " + m);
+        String name  = readStringOptional("New name [" + m.name + "]: ");
+        String email = readStringOptional("New email [" + m.email + "]: ");
+        String phone = readStringOptional("New phone [" + m.phone + "]: ");
+        if (!name.isEmpty())  m.name  = name;
+        if (!email.isEmpty()) m.email = email;
+        if (!phone.isEmpty()) m.phone = phone;
+        ok("Member updated.");
+    }
+
+    static void deactivateMember() {
+        int id = readInt("Enter Member ID to deactivate: ");
+        Member m = members.get(id);
+        if (m == null) { warn("Member not found."); return; }
+        if (!m.active) { warn("Member is already inactive."); return; }
+        if (!m.borrowedLoanIds.isEmpty()) {
+            warn("Member has active loans. Return all books first.");
+            return;
+        }
+        m.active = false;
+        ok("Member deactivated.");
+    }
+
+    // ─── LOAN OPERATIONS ─────────────────────────────────────────────────────
+    static void borrowBook() {
+        printSectionHeader("BORROW A BOOK");
+        int memberId = readInt("Member ID: ");
+        Member member = members.get(memberId);
+        if (member == null)  { warn("Member not found."); return; }
+        if (!member.active)  { warn("Member account is inactive."); return; }
+        if (member.borrowCount() >= MAX_BOOKS_PER_MEMBER) {
+            warn("Member has reached the borrow limit of " + MAX_BOOKS_PER_MEMBER + " books.");
+            return;
+        }
+
+        int bookId = readInt("Book ID: ");
+        Book book = books.get(bookId);
+        if (book == null)         { warn("Book not found."); return; }
+        if (!book.isAvailable())  { warn("No available copies of this book."); return; }
+
+        boolean alreadyBorrowed = loans.values().stream()
+            .anyMatch(l -> l.memberId == memberId && l.bookId == bookId && !l.returned);
+        if (alreadyBorrowed) {
+            warn("This member already has this book borrowed.");
+            return;
+        }
+
+        Loan loan = new Loan(memberId, bookId);
+        loans.put(loan.id, loan);
+        member.borrowedLoanIds.add(loan.id);
+        book.availableCopies--;
+
+        ok("Book borrowed successfully!");
+        System.out.printf("  Loan ID  : %d%n", loan.id);
+        System.out.printf("  Book     : %s%n", book.title);
+        System.out.printf("  Member   : %s%n", member.name);
+        System.out.printf("  Due Date : %s%n", loan.dueDate.format(DATE_FMT));
+    }
+
+    static void returnBook() {
+        printSectionHeader("RETURN A BOOK");
+        int loanId = readInt("Loan ID: ");
+        Loan loan = loans.get(loanId);
+        if (loan == null)     { warn("Loan not found."); return; }
+        if (loan.returned)    { warn("This loan has already been returned."); return; }
+
+        loan.returnDate = LocalDate.now();
+        loan.returned   = true;
+        loan.fine       = loan.calculateFine();
+
+        Book book = books.get(loan.bookId);
+        book.availableCopies++;
+
+        Member member = members.get(loan.memberId);
+        member.borrowedLoanIds.remove(Integer.valueOf(loan.id));
+
+        ok("Book returned successfully!");
+        if (loan.fine > 0) {
+            System.out.printf("  ⚠ Overdue fine: $%.2f (%.0f days late)%n",
+                loan.fine, (double) ChronoUnit.DAYS.between(loan.dueDate, loan.returnDate));
+        } else {
+            System.out.println("  No fine — returned on time.");
+        }
+    }
+
+    static void listActiveLoans() {
+        printSectionHeader("ACTIVE LOANS");
+        List<Loan> active = loans.values().stream()
+            .filter(l -> !l.returned).toList();
+        if (active.isEmpty()) { info("No active loans."); return; }
+        active.forEach(l -> {
+            Book b   = books.get(l.bookId);
+            Member m = members.get(l.memberId);
+            System.out.printf("%s%n  → \"%s\" borrowed by %s%n",
+                l, b != null ? b.title : "?", m != null ? m.name : "?");
+        });
+    }
+
+    static void listOverdueLoans() {
+        printSectionHeader("OVERDUE LOANS");
+        List<Loan> overdue = loans.values().stream()
+            .filter(Loan::isOverdue).toList();
+        if (overdue.isEmpty()) { ok("No overdue loans!"); return; }
+        overdue.forEach(l -> {
+            Book b   = books.get(l.bookId);
+            Member m = members.get(l.memberId);
+            System.out.printf("%s%n  → \"%s\" borrowed by %s | Fine: $%.2f%n",
+                l, b != null ? b.title : "?",
+                m != null ? m.name : "?", l.calculateFine());
+        });
+    }
+
+    static void viewMemberLoans() {
+        int memberId = readInt("Member ID: ");
+        Member member = members.get(memberId);
+        if (member == null) { warn("Member not found."); return; }
+        printSectionHeader("LOANS FOR: " + member.name);
+        List<Loan> memberLoans = loans.values().stream()
+            .filter(l -> l.memberId == memberId).toList();
+        if (memberLoans.isEmpty()) { info("No loan history."); return; }
+        memberLoans.forEach(l -> {
+            Book b = books.get(l.bookId);
+            System.out.printf("%s%n  → \"%s\"%n", l, b != null ? b.title : "?");
+        });
+    }
+
+    // ─── REPORTS ─────────────────────────────────────────────────────────────
+    static void summarizeLibrary() {
+        printSectionHeader("LIBRARY SUMMARY");
+        int totalBooks      = books.values().stream().mapToInt(b -> b.totalCopies).sum();
+        int availableBooks  = books.values().stream().mapToInt(b -> b.availableCopies).sum();
+        int borrowedBooks   = totalBooks - availableBooks;
+        long activeMembers  = members.values().stream().filter(m -> m.active).count();
+        long activeLoans    = loans.values().stream().filter(l -> !l.returned).count();
+        long overdueLoans   = loans.values().stream().filter(Loan::isOverdue).count();
+        double totalFines   = loans.values().stream().mapToDouble(Loan::calculateFine).sum();
+
+        System.out.printf("  Unique titles    : %d%n", books.size());
+        System.out.printf("  Total copies     : %d%n", totalBooks);
+        System.out.printf("  Available copies : %d%n", availableBooks);
+        System.out.printf("  Currently on loan: %d%n", borrowedBooks);
+        System.out.printf("  Total members    : %d (Active: %d)%n",
+            members.size(), activeMembers);
+        System.out.printf("  Active loans     : %d%n", activeLoans);
+        System.out.printf("  Overdue loans    : %d%n", overdueLoans);
+        System.out.printf("  Outstanding fines: $%.2f%n", totalFines);
+    }
+
+    static void mostBorrowedBooks() {
+        printSectionHeader("MOST BORROWED BOOKS (Top 10)");
+        Map<Integer, Long> counts = new HashMap<>();
+        loans.values().forEach(l -> counts.merge(l.bookId, 1L, Long::sum));
+        counts.entrySet().stream()
+            .sorted(Map.Entry.<Integer, Long>comparingByValue().reversed())
+            .limit(10)
+            .forEach(e -> {
+                Book b = books.get(e.getKey());
+                System.out.printf("  %3dx  [%d] %s — %s%n",
+                    e.getValue(), e.getKey(),
+                    b != null ? b.title : "Unknown",
+                    b != null ? b.author : "");
+            });
+    }
+
+    static void mostActiveMembers() {
+        printSectionHeader("MOST ACTIVE MEMBERS (Top 10)");
+        Map<Integer, Long> counts = new HashMap<>();
+        loans.values().forEach(l -> counts.merge(l.memberId, 1L, Long::sum));
+        counts.entrySet().stream()
+            .sorted(Map.Entry.<Integer, Long>comparingByValue().reversed())
+            .limit(10)
+            .forEach(e -> {
+                Member m = members.get(e.getKey());
+                System.out.printf("  %3d loans  [%d] %s%n",
+                    e.getValue(), e.getKey(),
+                    m != null ? m.name : "Unknown");
+            });
+    }
+
+    static void finesSummary() {
+        printSectionHeader("FINES SUMMARY");
+        double total   = loans.values().stream().mapToDouble(l ->
+            l.returned ? l.fine : l.calculateFine()).sum();
+        double collected = loans.values().stream().filter(l -> l.returned)
+            .mapToDouble(l -> l.fine).sum();
+        double outstanding = loans.values().stream().filter(l -> !l.returned)
+            .mapToDouble(Loan::calculateFine).sum();
+        System.out.printf("  Total fines      : $%.2f%n", total);
+        System.out.printf("  Collected        : $%.2f%n", collected);
+        System.out.printf("  Outstanding      : $%.2f%n", outstanding);
+        System.out.printf("  Rate per day     : $%.2f%n", FINE_PER_DAY);
+    }
+
+    static void genreBreakdown() {
+        printSectionHeader("BOOKS BY GENRE");
+        Map<String, Long> genreCount = new LinkedHashMap<>();
+        books.values().forEach(b -> genreCount.merge(b.genre, 1L, Long::sum));
+        genreCount.entrySet().stream()
+            .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+            .forEach(e -> System.out.printf("  %-20s %d title(s)%n",
+                e.getKey(), e.getValue()));
+    }
+
+    // ─── SEED DATA ───────────────────────────────────────────────────────────
+    static void seedData() {
+        // Seed books
+        addSeedBook("The Great Gatsby",          "F. Scott Fitzgerald", "978-0743273565", "Fiction",       1925, 3);
+        addSeedBook("To Kill a Mockingbird",     "Harper Lee",          "978-0061935466", "Fiction",       1960, 4);
+        addSeedBook("1984",                      "George Orwell",       "978-0451524935", "Dystopia",      1949, 5);
+        addSeedBook("Clean Code",                "Robert C. Martin",    "978-0132350884", "Technology",    2008, 2);
+        addSeedBook("The Pragmatic Programmer",  "Andrew Hunt",         "978-0135957059", "Technology",    2019, 2);
+        addSeedBook("Sapiens",                   "Yuval Noah Harari",   "978-0062316097", "History",       2011, 3);
+        addSeedBook("Atomic Habits",             "James Clear",         "978-0735211292", "Self-Help",     2018, 4);
+        addSeedBook("Dune",                      "Frank Herbert",       "978-0441013593", "Sci-Fi",        1965, 3);
+        addSeedBook("The Hobbit",                "J.R.R. Tolkien",      "978-0547928227", "Fantasy",       1937, 4);
+        addSeedBook("Thinking, Fast and Slow",   "Daniel Kahneman",     "978-0374533557", "Psychology",   2011, 2);
+        addSeedBook("The Alchemist",             "Paulo Coelho",        "978-0062315007", "Fiction",       1988, 3);
+        addSeedBook("Deep Work",                 "Cal Newport",         "978-1455586691", "Self-Help",     2016, 2);
+
+        // Seed members
+        addSeedMember("Alice Reyes",     "alice@email.com",   "09171234567");
+        addSeedMember("Bob Santos",      "bob@email.com",     "09181234567");
+        addSeedMember("Clara Mendoza",   "clara@email.com",   "09191234567");
+        addSeedMember("David Cruz",      "david@email.com",   "09201234567");
+        addSeedMember("Elena Torres",    "elena@email.com",   "09211234567");
+
+        // Seed a few loans
+        createSeedLoan(2000, 1000); // Alice borrows Gatsby
+        createSeedLoan(2001, 1002); // Bob borrows 1984
+        createSeedLoan(2002, 1003); // Clara borrows Clean Code
+    }
+
+    static void addSeedBook(String title, String author, String isbn,
+                             String genre, int year, int copies) {
+        Book b = new Book(title, author, isbn, genre, year, copies);
+        books.put(b.id, b);
+    }
+
+    static void addSeedMember(String name, String email, String phone) {
+        Member m = new Member(name, email, phone);
+        members.put(m.id, m);
+    }
+
+    static void createSeedLoan(int memberId, int bookId) {
+        Member member = members.get(memberId);
+        Book book     = books.get(bookId);
+        if (member == null || book == null || !book.isAvailable()) return;
+        Loan loan = new Loan(memberId, bookId);
+        loans.put(loan.id, loan);
+        member.borrowedLoanIds.add(loan.id);
+        book.availableCopies--;
+    }
+
+    // ─── UI HELPERS ──────────────────────────────────────────────────────────
+    static void printBanner() {
+        System.out.println();
+        System.out.println("╔═══════════════════════════════════════════╗");
+        System.out.println("║      📚  LIBRARY MANAGEMENT SYSTEM        ║");
+        System.out.println("║       Welcome! Loan period: 14 days       ║");
+        System.out.println("╚═══════════════════════════════════════════╝");
+        System.out.printf("  Loaded: %d books | %d members | %d loans%n",
+            books.size(), members.size(), loans.size());
+    }
+
+    static void printSectionHeader(String title) {
+        System.out.println("\n┌─ " + title + " " + "─".repeat(Math.max(0, 44 - title.length())) + "┐");
+    }
+
+    static void printBookHeader() {
+        System.out.println(" ID    Title                                Author                 Genre           Year  Copies");
+        System.out.println(" ──────────────────────────────────────────────────────────────────────────────────────────────");
+    }
+
+    static void ok(String msg)   { System.out.println("  ✔ " + msg); }
+    static void info(String msg) { System.out.println("  ℹ " + msg); }
+    static void warn(String msg) { System.out.println("  ✘ " + msg); }
+
+    static String truncate(String s, int max) {
+        return s.length() <= max ? s : s.substring(0, max - 1) + "…";
+    }
+
+    static int readInt(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            try {
+                return Integer.parseInt(sc.nextLine().trim());
+            } catch (NumberFormatException e) {
+                warn("Please enter a valid number.");
+            }
+        }
+    }
+
+    static String readString(String prompt) {
+        System.out.print(prompt);
+        return sc.nextLine().trim();
+    }
+
+    static String readStringOptional(String prompt) {
+        System.out.print(prompt);
+        return sc.nextLine().trim();
+    }
+}
+	
